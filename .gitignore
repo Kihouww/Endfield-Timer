@@ -1,0 +1,12 @@
+# 忽略 PyInstaller 生成的临时文件
+build/
+dist/
+*.spec
+
+# 忽略 Python 缓存
+__pycache__/
+*.pyc
+
+# 忽略本地编辑器配置
+.vscode/
+.idea/
