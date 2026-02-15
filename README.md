@@ -4,6 +4,7 @@
 ![OpenCV](https://img.shields.io/badge/OpenCV-Computer%20Vision-green?style=flat-square&logo=opencv)
 ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey?style=flat-square&logo=windows)
 ![Status](https://img.shields.io/badge/Status-Beta-orange?style=flat-square)
+[![Bilibili](https://img.shields.io/badge/Bilibili-%E6%B2%90%E5%85%AE%E7%AB%B9-fb7299?style=flat-square&logo=bilibili&logoColor=white)](https://space.bilibili.com/362473917)
 
 > **基于 Python + OpenCV 实现的图像识别 BOSS 战计时工具**
 
