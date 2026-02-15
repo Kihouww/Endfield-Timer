@@ -259,6 +259,13 @@ class BossTimerUnified:
                 "height": int(screen_h * 0.2)
             }
 
+            self.right_col_monitor = {
+            "top": top,
+            "left": left + screen_w - 1, # 左偏移 + 屏幕宽 - 1
+            "width": 1,
+            "height": screen_h
+            }
+
     def setup_ui(self):
         self.root = tk.Tk()
         self.root.title("Endfield_BossTimer")
@@ -426,6 +433,7 @@ class BossTimerUnified:
                 img_center = np.array(sct.grab(self.center_monitor))
                 img_pause = np.array(sct.grab(self.pause_monitor))
                 img_finish = np.array(sct.grab(self.finish_monitor))
+                img_right = np.array(sct.grab(self.right_col_monitor))
 
                 # [MARBLE] 专用中心 3x3 黑屏检测
                 # 假设 img_center 足够大，取其几何中心
@@ -522,16 +530,27 @@ class BossTimerUnified:
                         
                         # A. 白垩界卫 (MARBLE) - 2次计数逻辑
                         elif self.current_boss == "MARBLE":
-                            if is_center_3x3_black:
-                                if not self.marble_black_latch:
-                                    self.marble_black_count += 1
-                                    self.marble_black_latch = True 
-                                    if self.marble_black_count >= 2:
-                                        self.accumulated_time += (now - self.start_time)
-                                        self.state = "STAGE_TRANSITION"
-                                        self.transition_start_time = now
+                            # 判定是否为“首次”：利用计数器为0作为特征 (Ready转Fighting时count会被重置为0)
+                            if self.marble_black_count == 0:
+                                # 首次逻辑：检测【最右侧列】是否全黑 (RGB全为0)
+                                # 注意：mss截图含Alpha通道，需切片[:3]取BGR
+                                if np.max(img_right[:,:,:3]) == 0:
+                                    self.accumulated_time += (now - self.start_time)
+                                    self.state = "STAGE_TRANSITION" # 进入 Waiting 逻辑
+                                    self.transition_start_time = now
+                                    self.marble_black_count = 99 # 标记已完成首次转场，防止重复触发
                             else:
-                                self.marble_black_latch = False
+                                # 非首次逻辑 (或后续循环)：保持原有的中心 3x3 两次计数逻辑
+                                if is_center_3x3_black:
+                                    if not self.marble_black_latch:
+                                        self.marble_black_count += 1
+                                        self.marble_black_latch = True 
+                                        if self.marble_black_count >= 2:
+                                            self.accumulated_time += (now - self.start_time)
+                                            self.state = "STAGE_TRANSITION"
+                                            self.transition_start_time = now
+                                else:
+                                    self.marble_black_latch = False
 
                         # B. 罗丹 (RHODAGN) - 统一使用 3x3 黑屏检测
                         # === 修改：将 is_black_large 替换为 is_center_3x3_black ===
