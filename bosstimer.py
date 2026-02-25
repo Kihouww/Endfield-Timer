@@ -4,7 +4,6 @@ import tkinter as tk
 from threading import Thread, Lock
 import win32gui
 import win32con
-import win32api
 
 # ==========================================
 #  配置区域
@@ -16,19 +15,12 @@ BOSS_CONFIGS = {
         # ... (原有的 hsv 阈值保持不变) ...
         "lower_red": [174, 159, 226],
         "upper_red": [175, 172, 255],
-        "lower_yellow": [18, 200, 200],
-        "upper_yellow": [26, 255, 255],
         
         # ... (原有的罗丹第二套阈值保持不变) ...
         "rhodagn_lower_1": [10, 156, 143],
         "rhodagn_upper_1": [10, 215, 253],
         "rhodagn_lower_2": [173, 156, 143],
         "rhodagn_upper_2": [178, 215, 253],
-        
-        # ... (开战触发逻辑保持不变) ...
-        "trigger_rect": (1260, 135, 1265, 145),
-        "trigger_color": [39, 115, 255],
-        "skip_ready": False,
 
         # === 新增：罗丹 FINISH 判定配置 ===
         # 2K基准坐标: 左上(1266, 285) - 右下(1288, 307)
@@ -45,22 +37,7 @@ BOSS_CONFIGS = {
         # === 战斗中血条阈值 (保持不变) ===
         "lower_red": [174, 159, 226], 
         "upper_red": [175, 172, 255],
-        "lower_yellow": [18, 200, 200],
-        "upper_yellow": [26, 255, 255],
         
-        # === 新增：开战检测专用 HSV 阈值 (已更新) ===
-        # 逻辑：S[160-172], V[153-173], H高段[174-175]
-        
-        # 阈值组1 (低段H): 设置为无效范围以禁用 (或者保留原值但逻辑上不匹配)
-        # 这里设置为全0，并在逻辑中确保它不干扰
-        "start_lower_1": [0, 0, 0],
-        "start_upper_1": [0, 0, 0],
-        
-        # 阈值组2 (高段H 174-175): 填入你的新数据
-        "start_lower_2": [174, 159, 136],
-        "start_upper_2": [175, 173, 153],
-        
-        "skip_ready": True,# 三位一体直接进战斗
         # 2K基准坐标: 左上(1266, 285) - 右下(1288, 307)
         "finish_rect": (1266, 285, 1288, 307),
         
@@ -76,10 +53,7 @@ BOSS_CONFIGS = {
         # (假设白垩界卫逻辑同罗丹，如有不同请自行修改)
         "lower_red": [174, 159, 226], 
         "upper_red": [175, 172, 255],
-        "lower_yellow": [18, 200, 200],
-        "upper_yellow": [26, 255, 255],
 
-        "skip_ready": False,
         # 2K基准坐标: 左上(1266, 285) - 右下(1288, 307)
         "finish_rect": (1266, 285, 1288, 307),
         
@@ -97,25 +71,18 @@ class BossTimerUnified:
         import numpy as np
 
         # === 基础通用配置 ===
-        self.BAR_W_PCT, self.BAR_H_PCT = 633/2560, 1/90
         self.TARGET_PAUSE_BGR = np.array([253, 253, 255])
-        self.TARGET_IDLE_BGR = np.array([39, 115, 255]) # 255,115,39
-        self.BLACK_THRESHOLD = 4
-        self.KEY_EXIT = 0x2E   
+        self.IS_WAIT_BGR = np.array([254,253,255])
 
         # === 状态变量 ===
         self.running = True
         self.current_boss = "RHODAGN" # 默认加载罗丹
         self.state = "IDLE"             
         self.start_time, self.accumulated_time = 0.0, 0.0
-        self.final_display_time, self.yellow_trigger_time = 0.0, 0.0
-        self.transition_step, self.last_transition_end_time = 0, 0.0
+        self.final_display_time = 0.0
         
         self.debug_ratio = 0.0
-        self.debug_avg_hsv = [0, 0, 0]
         self.lock = Lock()
-        self.last_save_time = 0.0
-        self.transition_start_time = 0.0
 
         # === 初始化加载 ===
         self.calculate_regions()
@@ -134,78 +101,41 @@ class BossTimerUnified:
             # 1. 通用参数
             self.lower_red = np.array(cfg["lower_red"])
             self.upper_red = np.array(cfg["upper_red"])
-            self.lower_yellow = np.array(cfg["lower_yellow"])
-            self.upper_yellow = np.array(cfg["upper_yellow"])
-            self.skip_ready_state = cfg.get("skip_ready", False)
+            
+            if boss_key == "RHODAGN":
+                self.rhodagn_l1 = np.array(cfg["rhodagn_lower_1"])
+                self.rhodagn_u1 = np.array(cfg["rhodagn_upper_1"])
+                self.rhodagn_l2 = np.array(cfg["rhodagn_lower_2"])
+                self.rhodagn_u2 = np.array(cfg["rhodagn_upper_2"])
 
-            # === 修改点 A：移除原本在这里的 self.TARGET_IDLE_BGR 读取 ===
-
-            if boss_key == "TRIAGGELOS":
-                # 加载 HSV 阈值
-                self.trig_lower_1 = np.array(cfg["start_lower_1"])
-                self.trig_upper_1 = np.array(cfg["start_upper_1"])
-                self.trig_lower_2 = np.array(cfg["start_lower_2"])
-                self.trig_upper_2 = np.array(cfg["start_upper_2"])
-                
-                # === 修改点 B：给一个 1x1 的假区域，防止 vision_loop 截图报错 ===
-                self.trigger_monitor = {"top": 0, "left": 0, "width": 1, "height": 1}
-                
+            if "finish_rect" in cfg:
+                # 1. 坐标计算
+                base_x1, base_y1, base_x2, base_y2 = cfg["finish_rect"]
+                real_left = int(base_x1 * self.scale_y) + self.screen_left
+                real_top = int(base_y1 * self.scale_y) + self.screen_top
+                real_right = int(base_x2 * self.scale_y) + self.screen_left
+                real_bottom = int(base_y2 * self.scale_y) + self.screen_top
+                    
+                self.finish_monitor = {
+                    "left": real_left, "top": real_top,
+                    "width": max(1, real_right - real_left),
+                    "height": max(1, real_bottom - real_top)
+                }
+                    
+                # 2. 阈值加载 (强制加载，不再依赖 if)
+                # 如果配置里有，就用配置的；如果没有，给默认值或者报错
+                self.finish_lower = np.array(cfg.get("finish_color_lower", np.array([0, 190, 255])))
+                self.finish_upper = np.array(cfg.get("finish_color_upper", np.array([0, 200, 255])))
+                    
             else:
-                # 罗丹逻辑
-                if boss_key == "RHODAGN":
-                    self.rhodagn_l1 = np.array(cfg["rhodagn_lower_1"])
-                    self.rhodagn_u1 = np.array(cfg["rhodagn_upper_1"])
-                    self.rhodagn_l2 = np.array(cfg["rhodagn_lower_2"])
-                    self.rhodagn_u2 = np.array(cfg["rhodagn_upper_2"])
-
-                if "trigger_color" in cfg:
-                    self.TARGET_IDLE_BGR = np.array(cfg["trigger_color"])
-                
-                # === 修改点 C：将区域计算移入 else，仅针对有 trigger_rect 的BOSS ===
-                if "trigger_rect" in cfg:
-                    base_x1, base_y1, base_x2, base_y2 = cfg["trigger_rect"]
-                    
-                    real_left = int(base_x1 * self.scale_x) + self.screen_left
-                    real_top = int(base_y1 * self.scale_y) + self.screen_top
-                    real_right = int(base_x2 * self.scale_x) + self.screen_left
-                    real_bottom = int(base_y2 * self.scale_y) + self.screen_top
-                    
-                    self.trigger_monitor = {
-                        "left": real_left,
-                        "top": real_top,
-                        "width": max(1, real_right - real_left),
-                        "height": max(1, real_bottom - real_top)
-                    }
-                
-                if "finish_rect" in cfg:
-                    # 1. 坐标计算
-                    base_x1, base_y1, base_x2, base_y2 = cfg["finish_rect"]
-                    real_left = int(base_x1 * self.scale_x) + self.screen_left
-                    real_top = int(base_y1 * self.scale_y) + self.screen_top
-                    real_right = int(base_x2 * self.scale_x) + self.screen_left
-                    real_bottom = int(base_y2 * self.scale_y) + self.screen_top
-                    
-                    self.finish_monitor = {
-                        "left": real_left, "top": real_top,
-                        "width": max(1, real_right - real_left),
-                        "height": max(1, real_bottom - real_top)
-                    }
-                    
-                    # 2. 阈值加载 (强制加载，不再依赖 if)
-                    # 如果配置里有，就用配置的；如果没有，给默认值或者报错
-                    self.finish_lower = np.array(cfg.get("finish_color_lower", np.array([0, 190, 255])))
-                    self.finish_upper = np.array(cfg.get("finish_color_upper", np.array([0, 200, 255])))
-                    
-                else:
-                    # 无配置时的默认空值
-                    self.finish_monitor = {"top": 0, "left": 0, "width": 1, "height": 1}
-                    self.finish_lower = np.array([0, 0, 0])
-                    self.finish_upper = np.array([0, 0, 0])
+                # 无配置时的默认空值
+                self.finish_monitor = {"top": 0, "left": 0, "width": 1, "height": 1}
+                self.finish_lower = np.array([0, 0, 0])
+                self.finish_upper = np.array([0, 0, 0])
 
             self.current_boss = boss_key
             self.state = "IDLE"
             self.accumulated_time = 0.0
-            print(f"配置切换: {cfg['name']}")
 
     def calculate_regions(self):
         with mss.mss() as sct:
@@ -226,9 +156,9 @@ class BossTimerUnified:
             # 2. 定义辅助函数 (利用计算好的比例)
             def get_region(x1, y1, x2, y2):
                 # x1, y1, x2, y2 均为 2K 分辨率下的原始坐标
-                l = int(x1 * self.scale_x) + left
+                l = int(x1 * self.scale_y) + left
                 t = int(y1 * self.scale_y) + top
-                r = int(x2 * self.scale_x) + left
+                r = int(x2 * self.scale_y) + left
                 b = int(y2 * self.scale_y) + top
                 return {"left": l, "top": t, "width": max(1, r - l), "height": max(1, b - t)}
 
@@ -236,7 +166,7 @@ class BossTimerUnified:
             # 注意：这里直接填 2K 下的坐标即可，函数会自动缩放
             
             # Boss 血条 (特殊居中逻辑)
-            bw = int(633 * self.scale_x)
+            bw = int(633 * self.scale_y)
             bh = int(16 * self.scale_y)
             self.boss_monitor = {
                 "top": int(79 * self.scale_y) + top, 
@@ -244,27 +174,12 @@ class BossTimerUnified:
                 "width": bw, "height": bh
             }
             self.boss_pixels = bw * bh 
-
-            # 黄条区域 (105, 432) -> (125, 454)
-            self.yel_monitor = get_region(105, 432, 125, 454)
             
             # 暂停图标 (2540, 630) -> (2560, 900)
             self.pause_monitor = get_region(2540, 630, 2560, 900)
-            
-            # 中心区域 (保持比例计算)
-            self.center_monitor = {
-                "top": int(screen_h * 0.4) + top, 
-                "left": int(screen_w * 0.4) + left, 
-                "width": int(screen_w * 0.2), 
-                "height": int(screen_h * 0.2)
-            }
 
-            self.right_col_monitor = {
-            "top": top,
-            "left": left + screen_w - 1, # 左偏移 + 屏幕宽 - 1
-            "width": 1,
-            "height": screen_h
-            }
+            # 开战检测
+            self.wait_monitor = get_region(165, 175, 200, 200)
 
     def setup_ui(self):
         self.root = tk.Tk()
@@ -391,6 +306,24 @@ class BossTimerUnified:
         self.lbl_msg = tk.Label(self.root, text="", font=("SimHei", f_size_status, "bold"), fg="#32CD32", bg="#010101")
         self.lbl_msg.place(x=0, y=y_msg, width=win_w, height=h_msg)
 
+        # 退出按钮ui
+        f_size_close = int(10 * font_scale)
+        self.btn_close = tk.Label(self.root, text=" × ", font=("Verdana", f_size_close),
+                                  fg = "#AAAAAA", bg = "#333333", cursor = "hand2")
+        self.btn_close.place(x = s_x(60), y = s_y(15), anchor = "nw")
+
+        def on_close_enter(_):
+            self.btn_close.config(bg = "#FF4444", fg = "#FFFFFF")
+        def on_close_leave(_):
+            self.btn_close.config(bg = "#333333", fg = "#AAAAAA")
+        def on_close_click(_):
+            import os
+            os._exit(0)
+
+        self.btn_close.bind("<Enter>", on_close_enter)
+        self.btn_close.bind("<Leave>", on_close_leave)
+        self.btn_close.bind("<Button-1>", on_close_click)
+
         hwnd = win32gui.FindWindow(None, "Endfield_BossTimer")
         if hwnd:
             try:
@@ -410,56 +343,24 @@ class BossTimerUnified:
 
     def update_debug_text(self):
         boss_name = BOSS_CONFIGS[self.current_boss]["name"]
-        self.lbl_debug.config(text=f"[{boss_name}] HP: {self.debug_ratio:.1%} | [DEL] EXIT")
+        self.lbl_debug.config(text=f"[{boss_name}] HP: {self.debug_ratio:.1%}")
 
     def reset_timer(self):
         with self.lock:
             self.state = "IDLE"
             self.start_time, self.accumulated_time, self.final_display_time = 0.0, 0.0, 0.0
-            self.yellow_trigger_time, self.transition_step, self.last_transition_end_time = 0.0, 0, 0.0
 
     def vision_loop(self):
         with mss.mss() as sct:
             while self.running:
-                if win32api.GetAsyncKeyState(self.KEY_EXIT) & 0x8000:
-                    self.root.after(0, self.root.destroy); break
                 if self.state == "FINISHED":
                     time.sleep(0.1); continue
 
                 now = time.time()
-                img_trg = np.array(sct.grab(self.trigger_monitor))
                 img_boss = np.array(sct.grab(self.boss_monitor))
-                img_yel = np.array(sct.grab(self.yel_monitor))
-                img_center = np.array(sct.grab(self.center_monitor))
                 img_pause = np.array(sct.grab(self.pause_monitor))
                 img_finish = np.array(sct.grab(self.finish_monitor))
-                img_right = np.array(sct.grab(self.right_col_monitor))
-
-                # [MARBLE] 专用中心 3x3 黑屏检测
-                # 假设 img_center 足够大，取其几何中心
-                ch, cw = img_center.shape[:2]
-                ccy, ccx = ch // 2, cw // 2
-                center_3x3 = img_center[ccy-1:ccy+2, ccx-1:ccx+2, :3]
-                # 预计算结果供后续使用
-                is_center_3x3_black = (np.mean(center_3x3) < 2.0) if center_3x3.size > 0 else False
-
-                center_mean = np.mean(img_center[:,:,:3])
-                is_center_black = center_mean < 15.0
-                
-                is_idle_trigger = False
-                if self.state == "IDLE":
-                    if self.current_boss == "TRIAGGELOS":
-                        # 三位一体掩膜检测
-                        hsv_boss_check = cv2.cvtColor(img_boss[:,:,:3], cv2.COLOR_BGR2HSV)
-                        mask_trigger = cv2.inRange(hsv_boss_check, self.trig_lower_2, self.trig_upper_2)
-                        is_idle_trigger = cv2.countNonZero(mask_trigger) > 325
-                    elif self.current_boss == "MARBLE":
-                        # 白垩界卫 IDLE 检测将在下面直接用 is_center_3x3_black，这里不做处理
-                        pass 
-                    else:
-                        # 罗丹逻辑
-                        diff = np.abs(img_trg[:, :, :3] - self.TARGET_IDLE_BGR)
-                        is_idle_trigger = np.all(diff < 3)
+                img_wait = np.array(sct.grab(self.wait_monitor))
 
                 hsv_boss = cv2.cvtColor(img_boss[:,:,:3], cv2.COLOR_BGR2HSV)
 
@@ -477,40 +378,25 @@ class BossTimerUnified:
                 # 3. 计算最终比例 (此时 red_ratio 包含了旧值和新值的所有符合像素)
                 red_ratio = cv2.countNonZero(mask_main) / self.boss_pixels
                 
-                avg_hsv = np.mean(cv2.cvtColor(img_yel[:,:,:3], cv2.COLOR_BGR2HSV), axis=(0, 1))
-                is_black_large = np.mean(img_center[:,:,:3]) < self.BLACK_THRESHOLD
-                
-                avg_pause_bgr = np.mean(img_pause[:, :, :3], axis=(0, 1))
-                pause_detected = np.all(np.round(avg_pause_bgr) == self.TARGET_PAUSE_BGR)
+                # 计算 pause 区域是否全为 TARGET_PAUSE_BGR (允许±4误差，防止渲染色差)
+                diff_pause = np.abs(img_pause[:, :, :3].astype(int) - self.TARGET_PAUSE_BGR)
+                pause_detected = np.all(diff_pause <= 4)
+
+                diff_wait = np.abs(img_wait[:, :, :3].astype(int) - self.IS_WAIT_BGR)
+                is_wait_triggered = np.all(diff_wait <= 2)
 
                 with self.lock:
                     self.debug_ratio = red_ratio
                     
                     if self.state == "IDLE":
-                        if self.current_boss == "MARBLE":
-                            if is_center_3x3_black:
-                                self.state = "WAITING"
-                        elif self.current_boss == "TRIAGGELOS":
-                            if is_idle_trigger:
-                                if self.skip_ready_state:
-                                    self.state, self.start_time = "FIGHTING", now
-                                else:
-                                    self.state = "WAITING"
-                        else: # RHODAGN
-                            if is_idle_trigger:
-                                if self.skip_ready_state:
-                                    self.state, self.start_time = "FIGHTING", now
-                                else:
-                                    self.state = "WAITING"
+                        # 所有 Boss 统一：只要监测到目标区域符合颜色，进入 WAITING
+                        if is_wait_triggered:
+                            self.state = "WAITING"
                             
                     elif self.state == "WAITING":
-                        if self.current_boss == "MARBLE":
-                            if red_ratio > 0.50:
-                                self.state, self.start_time = "FIGHTING", now
-                                self.marble_black_count = 0
-                                self.marble_black_latch = False
-                        elif red_ratio > 0.01: # 罗丹/其他默认
-                             self.state, self.start_time = "FIGHTING", now
+                        # 所有 Boss 统一：只要目标区域颜色不再符合（转场消失/UI变化），立刻进入 FIGHTING
+                        if not is_wait_triggered:
+                            self.state, self.start_time = "FIGHTING", now
 
                     elif self.state == "FIGHTING":
                         # [优先级 1] Finish
@@ -524,67 +410,9 @@ class BossTimerUnified:
                         elif pause_detected:
                             self.accumulated_time += (now - self.start_time)
                             self.state = "PAUSED"
-                        
-                        # [优先级 3] 转场检测 (Logic 统一使用 is_center_3x3_black)
-                        # =======================================================
-                        
-                        # A. 白垩界卫 (MARBLE) - 2次计数逻辑
-                        elif self.current_boss == "MARBLE":
-                            # 判定是否为“首次”：利用计数器为0作为特征 (Ready转Fighting时count会被重置为0)
-                            if self.marble_black_count == 0:
-                                # 首次逻辑：检测【最右侧列】是否全黑 (RGB全为0)
-                                # 注意：mss截图含Alpha通道，需切片[:3]取BGR
-                                if np.max(img_right[:,:,:3]) == 0:
-                                    self.accumulated_time += (now - self.start_time)
-                                    self.state = "STAGE_TRANSITION" # 进入 Waiting 逻辑
-                                    self.transition_start_time = now
-                                    self.marble_black_count = 99 # 标记已完成首次转场，防止重复触发
-                            else:
-                                # 非首次逻辑 (或后续循环)：保持原有的中心 3x3 两次计数逻辑
-                                if is_center_3x3_black:
-                                    if not self.marble_black_latch:
-                                        self.marble_black_count += 1
-                                        self.marble_black_latch = True 
-                                        if self.marble_black_count >= 2:
-                                            self.accumulated_time += (now - self.start_time)
-                                            self.state = "STAGE_TRANSITION"
-                                            self.transition_start_time = now
-                                else:
-                                    self.marble_black_latch = False
-
-                        # B. 罗丹 (RHODAGN) - 统一使用 3x3 黑屏检测
-                        # === 修改：将 is_black_large 替换为 is_center_3x3_black ===
-                        elif self.current_boss == "RHODAGN" and is_center_3x3_black:
-                            # 保持原有的 3秒 防抖冷却逻辑
-                            if (now - self.last_transition_end_time > 3.0):
-                                self.accumulated_time += (now - self.start_time)
-                                self.state, self.transition_step = "STAGE_TRANSITION", 1
                             
                     elif self.state == "PAUSED" and not pause_detected:
                         self.start_time, self.state = now, "FIGHTING"
-                        
-                    elif self.state == "STAGE_TRANSITION":
-                        if self.current_boss == "MARBLE":
-                            # 1. 强制锁定 1s
-                            if (now - self.transition_start_time) > 1.0:
-                                if red_ratio > 0.50:
-                                    self.state = "FIGHTING"
-                                    self.start_time = now
-                        else:
-                            # 罗丹转场 (步骤逻辑不变，但检测条件已统一)
-                            # step 1: 等待屏幕变亮 (非黑)
-                            if self.transition_step == 1 and not is_center_3x3_black:
-                                self.transition_step = 2 
-                            # step 2: 再次检测到黑屏 (这里罗丹原来是大范围黑，现在也统一为 3x3)
-                            elif self.transition_step == 2 and is_center_3x3_black:
-                                self.state, self.start_time, self.transition_step = "FIGHTING", now, 0
-                                self.last_transition_end_time = now
-                                
-                    elif self.state == "COOLING_DOWN":
-                        if (now - self.yellow_trigger_time) >= 0.8:
-                            raw = (self.yellow_trigger_time - self.start_time + self.accumulated_time)
-                            self.final_display_time = raw - 0.89
-                            self.state = "FINISHED"
                             
                 time.sleep(0.005)
 
@@ -594,9 +422,6 @@ class BossTimerUnified:
             if self.state == "IDLE":
                 self.lbl_status.config(text="O N   I D L E", fg="#444444")
                 self.lbl_time.config(text="00.00", fg="#444444")
-            elif self.state == "WAITING":
-                self.lbl_status.config(text="READY", fg="#FFFFFF")
-                self.lbl_time.config(text="00.00", fg="#FFFFFF")
             elif self.state == "FIGHTING":
                 cur = (now - self.start_time) + self.accumulated_time
                 self.lbl_time.config(text=f"{cur:.2f}", fg="#FF4444")
@@ -604,12 +429,12 @@ class BossTimerUnified:
             elif self.state == "PAUSED":
                 self.lbl_time.config(text=f"{self.accumulated_time:.2f}", fg="#FFD700")
                 self.lbl_status.config(text="P A U S E D", fg="#FFD700")
-            elif self.state == "STAGE_TRANSITION":
-                self.lbl_time.config(text=f"{self.accumulated_time:.2f}", fg="#555555")
-                self.lbl_status.config(text="WAITING", fg="#AAAAAA")
             elif self.state == "FINISHED":
                 self.lbl_time.config(text=f"{self.final_display_time:.2f}", fg="#32CD32")
                 self.lbl_status.config(text="F I N I S H", fg="#32CD32")
+            elif self.state == "WAITING":
+                self.lbl_status.config(text="READY", fg="#FFFFFF")
+                self.lbl_time.config(text="00.00", fg="#FFFFFF")
             
             self.update_debug_text()
             
