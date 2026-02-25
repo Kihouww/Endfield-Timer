@@ -4,6 +4,12 @@ import tkinter as tk
 from threading import Thread, Lock
 import win32gui
 import win32con
+import ctypes
+
+try:
+    ctypes.windll.user32.SetProcessDPIAware()
+except Exception:
+    pass
 
 # ==========================================
 #  配置区域
@@ -77,7 +83,8 @@ class BossTimerUnified:
         # === 状态变量 ===
         self.running = True
         self.current_boss = "RHODAGN" # 默认加载罗丹
-        self.state = "IDLE"             
+        self.state = "WAITING_FOR_GAME"
+        self.game_found = False
         self.start_time, self.accumulated_time = 0.0, 0.0
         self.final_display_time = 0.0
         
@@ -138,48 +145,52 @@ class BossTimerUnified:
             self.accumulated_time = 0.0
 
     def calculate_regions(self):
-        with mss.mss() as sct:
-            m = sct.monitors[1]
-            screen_w, screen_h = m["width"], m["height"]
-            left, top = m["left"], m["top"]
-            
-            # 1. === 关键修改：计算全局缩放比例 (基准 2560x1440) ===
-            self.scale_x = screen_w / 2560
-            self.scale_y = screen_h / 1440
-            
-            # 保存屏幕偏移量，给 load_boss_config 用
-            self.screen_left = left
-            self.screen_top = top
-            self.screen_w = screen_w # UI设置还需要用到这个
-            self.screen_h = screen_h
+        # 获取游戏窗口绝对坐标
+        hwnd = win32gui.FindWindow(None, "Endfield")
+        # 假窗口过滤
+        self.game_found = False
 
-            # 2. 定义辅助函数 (利用计算好的比例)
-            def get_region(x1, y1, x2, y2):
-                # x1, y1, x2, y2 均为 2K 分辨率下的原始坐标
-                l = int(x1 * self.scale_y) + left
-                t = int(y1 * self.scale_y) + top
-                r = int(x2 * self.scale_y) + left
-                b = int(y2 * self.scale_y) + top
-                return {"left": l, "top": t, "width": max(1, r - l), "height": max(1, b - t)}
+        if hwnd and win32gui.IsWindowVisible(hwnd):
+            # 剔除边框，只取纯游戏画面的绝对坐标和长宽
+            left, top = win32gui.ClientToScreen(hwnd, (0, 0))
+            _, _, screen_w, screen_h = win32gui.GetClientRect(hwnd)
 
-            # 3. 计算通用区域 (Boss血条、黄条、暂停图标等)
-            # 注意：这里直接填 2K 下的坐标即可，函数会自动缩放
+            # 假窗口过滤
+            if screen_w >= 1280:
+                self.game_found = True
+        else:
+            # 没找到游戏时，默认抓取主显示器作为保底数据，防止程序崩溃
+            with mss.mss() as sct:
+                m = sct.monitors[1]
+                screen_w, screen_h = m["width"], m["height"]
+                left, top = m["left"], m["top"]
+            self.game_found = False
             
-            # Boss 血条 (特殊居中逻辑)
-            bw = int(633 * self.scale_y)
-            bh = int(16 * self.scale_y)
-            self.boss_monitor = {
-                "top": int(79 * self.scale_y) + top, 
-                "left": int((screen_w - bw) / 2) + left, 
-                "width": bw, "height": bh
-            }
-            self.boss_pixels = bw * bh 
-            
-            # 暂停图标 (2540, 630) -> (2560, 900)
-            self.pause_monitor = get_region(2540, 630, 2560, 900)
+        self.scale_x = screen_w / 2560
+        self.scale_y = screen_h / 1440
+        self.screen_left = left
+        self.screen_top = top
+        self.screen_w = screen_w
+        self.screen_h = screen_h
 
-            # 开战检测
-            self.wait_monitor = get_region(165, 175, 200, 200)
+        def get_region(x1, y1, x2, y2):
+            l = int(x1 * self.scale_y) + left
+            t = int(y1 * self.scale_y) + top
+            r = int(x2 * self.scale_y) + left
+            b = int(y2 * self.scale_y) + top
+            return {"left": l, "top": t, "width": max(1, r - l), "height": max(1, b - t)}
+
+        bw = int(633 * self.scale_y)
+        bh = int(16 * self.scale_y)
+        self.boss_monitor = {
+            "top": int(79 * self.scale_y) + top, 
+            "left": int((screen_w - bw) / 2) + left, 
+            "width": bw, "height": bh
+        }
+        self.boss_pixels = bw * bh 
+        
+        self.pause_monitor = get_region(2540, 630, 2560, 900)
+        self.wait_monitor = get_region(165, 175, 200, 200)
 
     def setup_ui(self):
         self.root = tk.Tk()
@@ -345,6 +356,16 @@ class BossTimerUnified:
         boss_name = BOSS_CONFIGS[self.current_boss]["name"]
         self.lbl_debug.config(text=f"[{boss_name}] HP: {self.debug_ratio:.1%}")
 
+    def reposition_ui(self):
+        #游戏开启后，动态将 UI 移动到对应的显示器/窗口位置
+        BASE_W, BASE_H = 580, 230
+        win_w = int(self.screen_w * (BASE_W / 2560))
+        win_h = int(self.screen_h * (BASE_H / 1440))
+        ui_x = int(self.screen_w * (50 / 2560)) + self.screen_left
+        ui_y = int(self.screen_h * (520 / 1440)) + self.screen_top
+        self.root.geometry(f"{win_w}x{win_h}+{ui_x}+{ui_y}")
+
+
     def reset_timer(self):
         with self.lock:
             self.state = "IDLE"
@@ -353,6 +374,19 @@ class BossTimerUnified:
     def vision_loop(self):
         with mss.mss() as sct:
             while self.running:
+                if not self.game_found:
+                    self.calculate_regions()
+                    if self.game_found:
+                        self.load_boss_config(self.current_boss)
+                        self.root.after(0, self.reposition_ui)
+                        with self.lock:
+                            self.state = "IDLE"
+                    else:
+                        with self.lock:
+                            self.state = "WAITING_FOR_GAME"
+                        time.sleep(1)
+                        continue
+
                 if self.state == "FINISHED":
                     time.sleep(0.1); continue
 
@@ -416,12 +450,17 @@ class BossTimerUnified:
                             
                 time.sleep(0.005)
 
+    
+
     def update_ui(self):
         now = time.time()
         with self.lock:
-            if self.state == "IDLE":
-                self.lbl_status.config(text="O N   I D L E", fg="#444444")
-                self.lbl_time.config(text="00.00", fg="#444444")
+            if self.state == "WAITING_FOR_GAME":
+                self.lbl_status.config(text="游戏未启动", fg="#FF4444")
+                self.lbl_time.config(text="--.--",fg="#555555")
+            elif self.state == "IDLE":
+                self.lbl_status.config(text="O N   I D L E", fg="#555555")
+                self.lbl_time.config(text="00.00", fg="#555555")
             elif self.state == "FIGHTING":
                 cur = (now - self.start_time) + self.accumulated_time
                 self.lbl_time.config(text=f"{cur:.2f}", fg="#FF4444")
