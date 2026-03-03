@@ -118,10 +118,10 @@ class BossTimerUnified:
             if "finish_rect" in cfg:
                 # 1. 坐标计算
                 base_x1, base_y1, base_x2, base_y2 = cfg["finish_rect"]
-                real_left = int(base_x1 * self.scale_y) + self.screen_left
-                real_top = int(base_y1 * self.scale_y) + self.screen_top
-                real_right = int(base_x2 * self.scale_y) + self.screen_left
-                real_bottom = int(base_y2 * self.scale_y) + self.screen_top
+                real_left = int(base_x1 * self.ui_scale) + self.screen_left
+                real_top = int(base_y1 * self.ui_scale) + self.screen_top
+                real_right = int(base_x2 * self.ui_scale) + self.screen_left
+                real_bottom = int(base_y2 * self.ui_scale) + self.screen_top
                     
                 self.finish_monitor = {
                     "left": real_left, "top": real_top,
@@ -168,22 +168,26 @@ class BossTimerUnified:
             
         self.scale_x = screen_w / 2560
         self.scale_y = screen_h / 1440
+
+        # 缩放比例计算(beta)
+        self.ui_scale = min(self.scale_x, self.scale_y)
+
         self.screen_left = left
         self.screen_top = top
         self.screen_w = screen_w
         self.screen_h = screen_h
 
         def get_region(x1, y1, x2, y2):
-            l = int(x1 * self.scale_y) + left
-            t = int(y1 * self.scale_y) + top
-            r = int(x2 * self.scale_y) + left
-            b = int(y2 * self.scale_y) + top
+            l = int(x1 * self.ui_scale) + left
+            t = int(y1 * self.ui_scale) + top
+            r = int(x2 * self.ui_scale) + left
+            b = int(y2 * self.ui_scale) + top
             return {"left": l, "top": t, "width": max(1, r - l), "height": max(1, b - t)}
 
-        bw = int(633 * self.scale_y)
-        bh = int(16 * self.scale_y)
+        bw = int(633 * self.ui_scale)
+        bh = int(16 * self.ui_scale)
         self.boss_monitor = {
-            "top": int(79 * self.scale_y) + top, 
+            "top": int(79 * self.ui_scale) + top, 
             "left": int((screen_w - bw) / 2) + left, 
             "width": bw, "height": bh
         }
