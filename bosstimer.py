@@ -28,9 +28,7 @@ BOSS_CONFIGS = {
         "rhodagn_lower_2": [173, 156, 143],
         "rhodagn_upper_2": [178, 215, 253],
 
-        # === 新增：罗丹 FINISH 判定配置 ===
-        # 2K基准坐标: 左上(1266, 285) - 右下(1288, 307)
-        "finish_rect": (1266, 285, 1288, 307),
+        "finish_rect": (980, 0, 1290, 300),
         
         # 颜色阈值 BGR格式 (对应 RGB: 255, 190-200, 0)
         # OpenCV 是 BGR，所以是 [0, 190, 255]
@@ -43,9 +41,8 @@ BOSS_CONFIGS = {
         # === 战斗中血条阈值 (保持不变) ===
         "lower_red": [174, 159, 226], 
         "upper_red": [175, 172, 255],
-        
-        # 2K基准坐标: 左上(1266, 285) - 右下(1288, 307)
-        "finish_rect": (1266, 285, 1288, 307),
+
+        "finish_rect": (980, 0, 1290, 300),
         
         # 颜色阈值 BGR格式 (对应 RGB: 255, 190-200, 0)
         # OpenCV 是 BGR，所以是 [0, 190, 255]
@@ -60,8 +57,7 @@ BOSS_CONFIGS = {
         "lower_red": [174, 159, 226], 
         "upper_red": [175, 172, 255],
 
-        # 2K基准坐标: 左上(1266, 285) - 右下(1288, 307)
-        "finish_rect": (1266, 285, 1288, 307),
+        "finish_rect": (980, 0, 1290, 300),
         
         # 颜色阈值 BGR格式 (对应 RGB: 255, 190-200, 0)
         # OpenCV 是 BGR，所以是 [0, 190, 255]
@@ -131,14 +127,29 @@ class BossTimerUnified:
                     
                 # 2. 阈值加载 (强制加载，不再依赖 if)
                 # 如果配置里有，就用配置的；如果没有，给默认值或者报错
-                self.finish_lower = np.array(cfg.get("finish_color_lower", np.array([0, 190, 255])))
-                self.finish_upper = np.array(cfg.get("finish_color_upper", np.array([0, 200, 255])))
+                self.finish_lower = np.array(cfg.get("finish_color_lower", np.array([0, 197, 255])))
+                self.finish_upper = np.array(cfg.get("finish_color_upper", np.array([0, 197, 255])))
+
+                pts = np.array([
+                    [0, 0], 
+                    [int(10 * self.ui_scale), 0], 
+                    [int(310 * self.ui_scale), int(300 * self.ui_scale)], 
+                    [int(300 * self.ui_scale), int(300 * self.ui_scale)]
+                ], np.int32)
+                self.finish_poly_mask = np.zeros((self.finish_monitor["height"], self.finish_monitor["width"]), dtype=np.uint8)
+                cv2.fillPoly(self.finish_poly_mask, [pts], 255)
+
+                total_mask_pixels = cv2.countNonZero(self.finish_poly_mask)
+                self.finish_threshold = int(total_mask_pixels * (2900 / 3000))
                     
             else:
                 # 无配置时的默认空值
                 self.finish_monitor = {"top": 0, "left": 0, "width": 1, "height": 1}
                 self.finish_lower = np.array([0, 0, 0])
                 self.finish_upper = np.array([0, 0, 0])
+                self.finish_poly_mask = np.ones((1, 1), dtype=np.uint8) * 255
+                self.finish_threshold = 1
+                
 
             self.current_boss = boss_key
             self.state = "IDLE"
@@ -439,9 +450,10 @@ class BossTimerUnified:
                     elif self.state == "FIGHTING":
                         # [优先级 1] Finish
                         mask_finish = cv2.inRange(img_finish[:,:,:3], self.finish_lower, self.finish_upper)
-                        if cv2.countNonZero(mask_finish) > 20: 
+                        mask_finish = cv2.bitwise_and(mask_finish, mask_finish, mask=self.finish_poly_mask)
+                        if cv2.countNonZero(mask_finish) > self.finish_threshold: 
                             raw = (now - self.start_time) + self.accumulated_time
-                            self.final_display_time = raw - 1.17
+                            self.final_display_time = raw - 1.42
                             self.state = "FINISHED"
 
                         # [优先级 2] Pause
