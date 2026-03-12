@@ -63,6 +63,16 @@ BOSS_CONFIGS = {
         # OpenCV 是 BGR，所以是 [0, 190, 255]
         "finish_color_lower": [0, 190, 245],
         "finish_color_upper": [0, 205, 255],
+    },
+    "RUANYI": {
+        "name": "阮一",
+        "en_name": "RUAN YI",
+        # 阮一的血条颜色和通用结算区域保持一致
+        "lower_red": [174, 159, 226], 
+        "upper_red": [175, 172, 255],
+        "finish_rect": (980, 0, 1290, 300),
+        "finish_color_lower": [0, 190, 245],
+        "finish_color_upper": [0, 205, 255],
     }
 }
 
@@ -75,6 +85,8 @@ class BossTimerUnified:
         # === 基础通用配置 ===
         self.TARGET_PAUSE_BGR = np.array([253, 253, 255])
         self.IS_WAIT_BGR = np.array([254,253,255])
+        self.TARGET_PRE_READY_BGR = np.array([236, 236, 238])
+        self.pre_ready_timestamp = 0.0
 
         # === 状态变量 ===
         self.running = True
@@ -206,165 +218,129 @@ class BossTimerUnified:
         
         self.pause_monitor = get_region(2540, 630, 2560, 900)
         self.wait_monitor = get_region(165, 175, 200, 200)
+        self.pre_ready_monitor = get_region(1675, 1300, 1700, 1340)
 
     def setup_ui(self):
         self.root = tk.Tk()
         self.root.title("Endfield_BossTimer")
         
-        # === 1. 动态布局计算 ===
-        # 基础设计分辨率：2560x1440
-        BASE_W, BASE_H = 580, 230
+        # === 1. 动态布局计算 (增加少许高度防遮挡) ===
+        BASE_W, BASE_H = 360, 160  # 高度从150加到160，让排版更从容
         
-        # 计算实际窗口大小
         win_w = int(self.screen_w * (BASE_W / 2560))
         win_h = int(self.screen_h * (BASE_H / 1440))
-        
-        # 计算UI位置
         ui_x = int(self.screen_w * (50 / 2560)) + self.screen_left
         ui_y = int(self.screen_h * (520 / 1440)) + self.screen_top
-        
-        # 字体缩放系数
         font_scale = min(self.scale_x, self.scale_y)
         
-        # 辅助函数
         def s_y(val): return int(val * self.scale_y)
         def s_x(val): return int(val * self.scale_x)
 
         self.root.geometry(f"{win_w}x{win_h}+{ui_x}+{ui_y}") 
         self.root.overrideredirect(True)
-        self.root.attributes("-topmost", True, "-transparentcolor", "#010101")
-        self.root.config(bg="#010101")
+        
+        # === [核心视觉升级] 圆角透明背景 ===
+        self.bg_color = "#1C1C1E"
+        # -transparentcolor 防止 Win11 系统的 DWM 裁切黑影伪影
+        self.root.attributes("-topmost", True, "-alpha", 0.85, "-transparentcolor", "#000000")
+        self.root.config(bg=self.bg_color)
         self.root.bind("<Button-1>", lambda e: self.reset_timer())
+        
+        # 2. 用 Canvas 画一个圆角矩形
+        self.canvas = tk.Canvas(self.root, bg="#010101", highlightthickness=0)
+        self.canvas.place(x=0, y=0, width=win_w, height=win_h)
+        
+        def create_round_rect(x1, y1, x2, y2, r, **kwargs):
+            points = (x1+r, y1, x1+r, y1, x2-r, y1, x2-r, y1, x2, y1, x2, y1+r, x2, y1+r, x2, y2-r, x2, y2-r, x2, y2, x2-r, y2, x2-r, y2, x1+r, y2, x1+r, y2, x1, y2, x1, y2-r, x1, y2-r, x1, y1+r, x1, y1+r, x1, y1)
+            return self.canvas.create_polygon(points, **kwargs, smooth=True)
+            
+        # 往内缩1像素防止圆角边缘被系统截断
+        create_round_rect(1, 1, win_w-1, win_h-1, s_x(15), fill=self.bg_color)
+        
+        self.canvas.bind("<Button-1>", lambda e: self.reset_timer())
 
         # === 2. 控件布局 ===
+        top_bar_h = s_y(40)  # 顶部栏加高，把下方文字推开，防止遮挡托盘
         
-        # [时间显示] 
-        h_time = s_y(80) 
-        f_size_time = int(36 * font_scale)
-        self.lbl_time = tk.Label(self.root, text="00.00", font=("Verdana", f_size_time, "bold"), fg="#FFFFFF", bg="#010101")
-        self.lbl_time.place(x=0, y=0, width=win_w, height=h_time)
-        
-        # [状态显示]
-        y_status = h_time
-        h_status = s_y(30)
-        f_size_status = int(10 * font_scale)
-        self.lbl_status = tk.Label(self.root, text="O N   I D L E", font=("Verdana", f_size_status, "bold"), fg="#444444", bg="#010101")
-        self.lbl_status.place(x=0, y=y_status, width=win_w, height=h_status)
-        
-        # [Debug信息]
-        y_debug = y_status + h_status
-        h_debug = s_y(25)
-        f_size_debug = int(8 * font_scale)
-        self.lbl_debug = tk.Label(self.root, text="Waiting...", font=("Consolas", f_size_debug, "bold"), fg="#FFFF00", bg="#010101")
-        self.lbl_debug.place(x=0, y=y_debug, width=win_w, height=h_debug)
+        # [退出按钮]
+        f_size_close = int(14 * font_scale)
+        self.btn_close = tk.Label(self.root, text="×", font=("Microsoft YaHei", f_size_close),
+                                  fg="#8E8E93", bg=self.bg_color, cursor="hand2")
+        self.btn_close.place(x=win_w - s_x(15), y=s_y(6), anchor="ne")
 
-        # [按钮栏区域]
-        y_btn = y_debug + h_debug
-        h_btn = s_y(65)
-        
-        # 字体定义
-        f_size_cn = int(13 * font_scale)
-        f_size_en = int(7 * font_scale) 
-        f_size_sep = int(12 * font_scale)
-        
-        # 外部容器 (占满整行)
-        btn_frame_outer = tk.Frame(self.root, bg="#010101")
-        btn_frame_outer.place(x=0, y=y_btn, width=win_w, height=h_btn)
-        
-        # 内部容器 (绝对居中)
-        inner_frame = tk.Frame(btn_frame_outer, bg="#010101")
-        inner_frame.place(relx=0.5, rely=0.5, anchor="center")
-
-        # 定义高级按钮
-        def create_btn(parent, boss_key):
-            cfg = BOSS_CONFIGS[boss_key]
-            
-            # === 核心修复：指定每个按钮容器的固定宽度 ===
-            # 130 是基准宽度，防止文字挤在一起，也不会像之前那么宽
-            fixed_w = s_x(130) 
-            fixed_h = h_btn
-            
-            # 创建定宽容器，并关闭自动收缩 (pack_propagate(0))
-            container = tk.Frame(parent, bg="#010101", cursor="hand2", width=fixed_w, height=fixed_h)
-            container.pack_propagate(0) # 禁止子元素改变容器大小
-            container.pack(side="left", padx=s_x(5)) # 按钮之间的间距
-            
-            # 2. 中文名 (上方)
-            lbl_cn = tk.Label(container, text=cfg['name'], font=("SimHei", f_size_cn, "bold"), 
-                              fg="#888888", bg="#010101", cursor="hand2")
-            # y=s_y(5) 稍微往下一点点，留出呼吸感
-            lbl_cn.place(relx=0.5, y=s_y(5), anchor="n") 
-            
-            # 3. 英文名 (下方)
-            lbl_en = tk.Label(container, text=cfg['en_name'], font=("Verdana", f_size_en, "bold"), 
-                              fg="#555555", bg="#010101", cursor="hand2")
-            # y=s_y(28) 紧贴中文名下方
-            lbl_en.place(relx=0.5, y=s_y(28), anchor="n") 
-            
-            # 4. 绑定事件
-            widgets = [container, lbl_cn, lbl_en]
-            
-            def on_click(e):
-                self.handle_switch(boss_key)
-            def on_enter(e):
-                lbl_cn.config(fg="#FFFFFF")
-                lbl_en.config(fg="#AAAAAA")
-            def on_leave(e):
-                lbl_cn.config(fg="#888888")
-                lbl_en.config(fg="#555555")
-
-            for w in widgets:
-                w.bind("<Button-1>", on_click)
-                w.bind("<Enter>", on_enter)
-                w.bind("<Leave>", on_leave)
-                
-            return container
-
-        create_btn(inner_frame, "RHODAGN")
-        tk.Label(inner_frame, text="|", font=("SimHei", f_size_sep), fg="#333333", bg="#010101").pack(side="left")
-        create_btn(inner_frame, "TRIAGGELOS")
-        tk.Label(inner_frame, text="|", font=("SimHei", f_size_sep), fg="#333333", bg="#010101").pack(side="left")
-        create_btn(inner_frame, "MARBLE")
-
-        # [成功提示]
-        y_msg = y_btn + h_btn
-        h_msg = s_y(25)
-        self.lbl_msg = tk.Label(self.root, text="", font=("SimHei", f_size_status, "bold"), fg="#32CD32", bg="#010101")
-        self.lbl_msg.place(x=0, y=y_msg, width=win_w, height=h_msg)
-
-        # 退出按钮ui
-        f_size_close = int(10 * font_scale)
-        self.btn_close = tk.Label(self.root, text=" × ", font=("Verdana", f_size_close),
-                                  fg = "#AAAAAA", bg = "#333333", cursor = "hand2")
-        self.btn_close.place(x = s_x(60), y = s_y(15), anchor = "nw")
-
-        def on_close_enter(_):
-            self.btn_close.config(bg = "#FF4444", fg = "#FFFFFF")
-        def on_close_leave(_):
-            self.btn_close.config(bg = "#333333", fg = "#AAAAAA")
+        def on_close_enter(_): self.btn_close.config(fg="#FF453A")
+        def on_close_leave(_): self.btn_close.config(fg="#8E8E93")
         def on_close_click(_):
             import os
             os._exit(0)
-
+            
         self.btn_close.bind("<Enter>", on_close_enter)
         self.btn_close.bind("<Leave>", on_close_leave)
         self.btn_close.bind("<Button-1>", on_close_click)
 
+        # === Boss 托盘下拉菜单 ===
+        f_size_menu = int(11 * font_scale)
+        boss_name = BOSS_CONFIGS[self.current_boss]["name"]
+        
+        self.boss_menu_btn = tk.Menubutton(self.root, text=f"❖ 目标: {boss_name}", 
+                                           font=("Microsoft YaHei", f_size_menu, "bold"),
+                                           fg="#E5E5EA", bg=self.bg_color, 
+                                           activebackground="#2C2C2E", activeforeground="#FFFFFF",
+                                           cursor="hand2", relief="flat")
+        # 稍微往上抬一点，彻底告别遮挡
+        self.boss_menu_btn.place(x=s_x(10), y=s_y(5), anchor="nw")
+
+        self.boss_menu = tk.Menu(self.boss_menu_btn, tearoff=0, bg="#2C2C2E", fg="#FFFFFF", 
+                                 font=("Microsoft YaHei", f_size_menu),
+                                 activebackground="#0A84FF", activeforeground="#FFFFFF",
+                                 relief="flat", borderwidth=0)
+        self.boss_menu_btn.config(menu=self.boss_menu)
+        
+        for key, cfg in BOSS_CONFIGS.items():
+            self.boss_menu.add_command(label=f"{cfg['name']} ({cfg['en_name']})", 
+                                       command=lambda k=key: self.handle_switch(k))
+
+        # [主计时器显示] 
+        y_time = top_bar_h 
+        h_time = s_y(60)
+        f_size_time = int(42 * font_scale)
+        self.lbl_time = tk.Label(self.root, text="00.00", font=("Verdana", f_size_time, "bold"), fg="#FFFFFF", bg=self.bg_color)
+        self.lbl_time.place(x=0, y=y_time, width=win_w, height=h_time)
+        self.lbl_time.bind("<Button-1>", lambda e: self.reset_timer())
+        
+        # [状态与信息展示区]
+        y_status = y_time + h_time
+        h_status = s_y(25)
+        f_size_status = int(10 * font_scale)
+        self.lbl_status = tk.Label(self.root, text="O N   I D L E", font=("Microsoft YaHei", f_size_status, "bold"), fg="#8E8E93", bg=self.bg_color)
+        self.lbl_status.place(x=0, y=y_status, width=win_w, height=h_status)
+        
+        # [大幅调大 Debug(HP) 提示文字]
+        y_debug = y_status + h_status
+        f_size_debug = int(11 * font_scale) # 字体从 8 调大到了 11
+        self.lbl_debug = tk.Label(self.root, text="Waiting...", font=("Consolas", f_size_debug), fg="#FFD60A", bg=self.bg_color)
+        self.lbl_debug.place(x=0, y=y_debug, width=win_w, height=s_y(25)) 
+
+        self.root.update()  # 强制 Tkinter 立刻向系统注册并画出窗口句柄
+
         hwnd = win32gui.FindWindow(None, "Endfield_BossTimer")
         if hwnd:
             try:
-                win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE) | win32con.WS_EX_LAYERED)
+                import ctypes
+                radius = s_x(18)
+                rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, win_w, win_h, radius, radius)
+                ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
             except Exception:
                 pass
 
     def handle_switch(self, boss_key):
-        """ 处理按钮点击 """
+        """ 处理下拉菜单的切换点击 """
         self.load_boss_config(boss_key)
-        # 显示绿色提示
-        self.lbl_msg.config(text="切换成功！")
-        # 2秒后清空提示
-        self.root.after(2000, lambda: self.lbl_msg.config(text=""))
-        # 强制更新一下当前显示的 BOSS 名字到 Debug 栏
+        
+        # 核心更新：同步更改左上角菜单的主显示文字
+        boss_name = BOSS_CONFIGS[boss_key]["name"]
+        self.boss_menu_btn.config(text=f"❖ 目标: {boss_name}")
+        
         self.update_debug_text()
 
     def update_debug_text(self):
@@ -373,7 +349,7 @@ class BossTimerUnified:
 
     def reposition_ui(self):
         #游戏开启后，动态将 UI 移动到对应的显示器/窗口位置
-        BASE_W, BASE_H = 580, 230
+        BASE_W, BASE_H = 360, 160  # [修改] 高度匹配新 UI
         win_w = int(self.screen_w * (BASE_W / 2560))
         win_h = int(self.screen_h * (BASE_H / 1440))
         ui_x = int(self.screen_w * (50 / 2560)) + self.screen_left
@@ -385,6 +361,8 @@ class BossTimerUnified:
         with self.lock:
             self.state = "IDLE"
             self.start_time, self.accumulated_time, self.final_display_time = 0.0, 0.0, 0.0
+            self.finish_counter = 0
+            self.pre_ready_timestamp = 0.0
 
     def vision_loop(self):
         with mss.mss() as sct:
@@ -410,6 +388,7 @@ class BossTimerUnified:
                 img_pause = np.array(sct.grab(self.pause_monitor))
                 img_finish = np.array(sct.grab(self.finish_monitor))
                 img_wait = np.array(sct.grab(self.wait_monitor))
+                img_pre_ready = np.array(sct.grab(self.pre_ready_monitor))
 
                 hsv_boss = cv2.cvtColor(img_boss[:,:,:3], cv2.COLOR_BGR2HSV)
 
@@ -438,9 +417,19 @@ class BossTimerUnified:
                     self.debug_ratio = red_ratio
                     
                     if self.state == "IDLE":
-                        # 所有 Boss 统一：只要监测到目标区域符合颜色，进入 WAITING
-                        if is_wait_triggered:
-                            self.state = "WAITING"
+                        # 1. 检查右下角前置条件，要求无偏差 (diff == 0)
+                        diff_pre = np.abs(img_pre_ready[:, :, :3].astype(int) - self.TARGET_PRE_READY_BGR)
+                        is_pre_ready = np.all(diff_pre == 0)
+
+                        if is_pre_ready:
+                            # 只要满足前置条件，就不断刷新 0.5 秒的窗口期起点
+                            self.pre_ready_timestamp = now
+
+                        # 2. 如果当前处于 0.5 秒的窗口期内，且原版逻辑通过，则正式进入 WAITING
+                        if (now - self.pre_ready_timestamp <= 0.5) and self.pre_ready_timestamp > 0:
+                            if is_wait_triggered:
+                                self.state = "WAITING"
+                                self.pre_ready_timestamp = 0.0 # 触发后清空标记
                             
                     elif self.state == "WAITING":
                         # 所有 Boss 统一：只要目标区域颜色不再符合（转场消失/UI变化），立刻进入 FIGHTING
@@ -451,9 +440,8 @@ class BossTimerUnified:
                         # [优先级 1] Finish
                         mask_finish = cv2.inRange(img_finish[:,:,:3], self.finish_lower, self.finish_upper)
                         mask_finish = cv2.bitwise_and(mask_finish, mask_finish, mask=self.finish_poly_mask)
-                        if cv2.countNonZero(mask_finish) > self.finish_threshold: 
-                            raw = (now - self.start_time) + self.accumulated_time
-                            self.final_display_time = raw - 1.42
+                        if cv2.countNonZero(mask_finish) > self.finish_threshold and red_ratio < 0.05: 
+                            self.final_display_time = (now - self.start_time) + self.accumulated_time - 0.22
                             self.state = "FINISHED"
 
                         # [优先级 2] Pause
@@ -475,7 +463,7 @@ class BossTimerUnified:
                 self.lbl_status.config(text="游戏未启动", fg="#FF4444")
                 self.lbl_time.config(text="--.--",fg="#555555")
             elif self.state == "IDLE":
-                self.lbl_status.config(text="O N   I D L E", fg="#555555")
+                self.lbl_status.config(text="I D L E", fg="#555555")
                 self.lbl_time.config(text="00.00", fg="#555555")
             elif self.state == "FIGHTING":
                 cur = (now - self.start_time) + self.accumulated_time
