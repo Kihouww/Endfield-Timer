@@ -18,11 +18,10 @@ BOSS_CONFIGS = {
     "RHODAGN": {
         "name": "罗丹",
         "en_name": "RHODAGN",
-        # ... (原有的 hsv 阈值保持不变) ...
+
         "lower_red": [174, 159, 226],
         "upper_red": [175, 172, 255],
         
-        # ... (原有的罗丹第二套阈值保持不变) ...
         "rhodagn_lower_1": [10, 156, 143],
         "rhodagn_upper_1": [10, 215, 253],
         "rhodagn_lower_2": [173, 156, 143],
@@ -30,22 +29,18 @@ BOSS_CONFIGS = {
 
         "finish_rect": (980, 0, 1290, 300),
         
-        # 颜色阈值 BGR格式 (对应 RGB: 255, 190-200, 0)
-        # OpenCV 是 BGR，所以是 [0, 190, 255]
         "finish_color_lower": [0, 190, 245],
         "finish_color_upper": [0, 205, 255],
     },
     "TRIAGGELOS": {
         "name": "三位一体",
         "en_name": "TRIAGGELOS",
-        # === 战斗中血条阈值 (保持不变) ===
+
         "lower_red": [174, 159, 226], 
         "upper_red": [175, 172, 255],
 
         "finish_rect": (980, 0, 1290, 300),
-        
-        # 颜色阈值 BGR格式 (对应 RGB: 255, 190-200, 0)
-        # OpenCV 是 BGR，所以是 [0, 190, 255]
+
         "finish_color_lower": [0, 190, 245],
         "finish_color_upper": [0, 205, 255],
         
@@ -53,21 +48,19 @@ BOSS_CONFIGS = {
     "MARBLE": {
         "name": "白垩界卫",
         "en_name": "MARBLE\nAGGELOMOIRAI",
-        # (假设白垩界卫逻辑同罗丹，如有不同请自行修改)
+        
         "lower_red": [174, 159, 226], 
         "upper_red": [175, 172, 255],
 
         "finish_rect": (980, 0, 1290, 300),
         
-        # 颜色阈值 BGR格式 (对应 RGB: 255, 190-200, 0)
-        # OpenCV 是 BGR，所以是 [0, 190, 255]
         "finish_color_lower": [0, 190, 245],
         "finish_color_upper": [0, 205, 255],
     },
     "RUANYI": {
         "name": "阮一",
         "en_name": "RUAN YI",
-        # 阮一的血条颜色和通用结算区域保持一致
+
         "lower_red": [174, 159, 226], 
         "upper_red": [175, 172, 255],
         "finish_rect": (980, 0, 1290, 300),
@@ -82,13 +75,13 @@ class BossTimerUnified:
         import cv2
         import numpy as np
 
-        # === 基础通用配置 ===
+        # 基础通用配置
         self.TARGET_PAUSE_BGR = np.array([253, 253, 255])
         self.IS_WAIT_BGR = np.array([254,253,255])
         self.TARGET_PRE_READY_BGR = np.array([236, 236, 238])
         self.pre_ready_timestamp = 0.0
 
-        # === 状态变量 ===
+        # 状态变量
         self.running = True
         self.current_boss = "RHODAGN" # 默认加载罗丹
         self.state = "WAITING_FOR_GAME"
@@ -99,7 +92,7 @@ class BossTimerUnified:
         self.debug_ratio = 0.0
         self.lock = Lock()
 
-        # === 初始化加载 ===
+        # 初始化加载
         self.calculate_regions()
         # 加载默认BOSS配置
         self.load_boss_config("RHODAGN")
@@ -113,7 +106,7 @@ class BossTimerUnified:
     def load_boss_config(self, boss_key):
         cfg = BOSS_CONFIGS[boss_key]
         with self.lock:
-            # 1. 通用参数
+            # 通用参数
             self.lower_red = np.array(cfg["lower_red"])
             self.upper_red = np.array(cfg["upper_red"])
             
@@ -124,7 +117,7 @@ class BossTimerUnified:
                 self.rhodagn_u2 = np.array(cfg["rhodagn_upper_2"])
 
             if "finish_rect" in cfg:
-                # 1. 坐标计算
+                # 坐标计算
                 base_x1, base_y1, base_x2, base_y2 = cfg["finish_rect"]
                 real_left = int(base_x1 * self.ui_scale) + self.screen_left
                 real_top = int(base_y1 * self.ui_scale) + self.screen_top
@@ -137,7 +130,7 @@ class BossTimerUnified:
                     "height": max(1, real_bottom - real_top)
                 }
                     
-                # 2. 阈值加载 (强制加载，不再依赖 if)
+                # 阈值加载
                 # 如果配置里有，就用配置的；如果没有，给默认值或者报错
                 self.finish_lower = np.array(cfg.get("finish_color_lower", np.array([0, 197, 255])))
                 self.finish_upper = np.array(cfg.get("finish_color_upper", np.array([0, 197, 255])))
@@ -192,7 +185,7 @@ class BossTimerUnified:
         self.scale_x = screen_w / 2560
         self.scale_y = screen_h / 1440
 
-        # 缩放比例计算(beta)
+        # 缩放比例计算
         self.ui_scale = min(self.scale_x, self.scale_y)
 
         self.screen_left = left
@@ -224,8 +217,8 @@ class BossTimerUnified:
         self.root = tk.Tk()
         self.root.title("Endfield_BossTimer")
         
-        # === 1. 动态布局计算 (增加少许高度防遮挡) ===
-        BASE_W, BASE_H = 360, 160  # 高度从150加到160，让排版更从容
+        # 动态布局计算
+        BASE_W, BASE_H = 360, 160
         
         win_w = int(self.screen_w * (BASE_W / 2560))
         win_h = int(self.screen_h * (BASE_H / 1440))
@@ -239,14 +232,13 @@ class BossTimerUnified:
         self.root.geometry(f"{win_w}x{win_h}+{ui_x}+{ui_y}") 
         self.root.overrideredirect(True)
         
-        # === [核心视觉升级] 圆角透明背景 ===
+        # 背景
         self.bg_color = "#1C1C1E"
         # -transparentcolor 防止 Win11 系统的 DWM 裁切黑影伪影
         self.root.attributes("-topmost", True, "-alpha", 0.85, "-transparentcolor", "#000000")
         self.root.config(bg=self.bg_color)
-        self.root.bind("<Button-1>", lambda e: self.reset_timer())
         
-        # 2. 用 Canvas 画一个圆角矩形
+        # Canvas
         self.canvas = tk.Canvas(self.root, bg="#010101", highlightthickness=0)
         self.canvas.place(x=0, y=0, width=win_w, height=win_h)
         
@@ -254,19 +246,42 @@ class BossTimerUnified:
             points = (x1+r, y1, x1+r, y1, x2-r, y1, x2-r, y1, x2, y1, x2, y1+r, x2, y1+r, x2, y2-r, x2, y2-r, x2, y2, x2-r, y2, x2-r, y2, x1+r, y2, x1+r, y2, x1, y2, x1, y2-r, x1, y2-r, x1, y1+r, x1, y1+r, x1, y1)
             return self.canvas.create_polygon(points, **kwargs, smooth=True)
             
-        # 往内缩1像素防止圆角边缘被系统截断
         create_round_rect(1, 1, win_w-1, win_h-1, s_x(15), fill=self.bg_color)
-        
-        self.canvas.bind("<Button-1>", lambda e: self.reset_timer())
 
-        # === 2. 控件布局 ===
-        top_bar_h = s_y(40)  # 顶部栏加高，把下方文字推开，防止遮挡托盘
+        self.divider = tk.Frame(self.root, bg="#4A4A4C", height=1)
+        self.divider.place(x=0, y=s_y(45) - 1, width=win_w)
+
+        # 拖拽
+        self._drag_x = None
+        self._drag_y = None
         
-        # [退出按钮]
-        f_size_close = int(14 * font_scale)
+        # 顶部 45 像素为拖拽区
+        DRAG_ZONE_HEIGHT = s_y(45)
+
+        def start_drag(e):
+            if e.y <= DRAG_ZONE_HEIGHT:
+                self._drag_x = e.x
+                self._drag_y = e.y
+            else:
+                self._drag_x = None
+
+        def do_drag(e):
+            if self._drag_x is not None:
+                x = self.root.winfo_x() + (e.x - self._drag_x)
+                y = self.root.winfo_y() + (e.y - self._drag_y)
+                self.root.geometry(f"+{x}+{y}")
+
+        self.canvas.bind("<ButtonPress-1>", start_drag)
+        self.canvas.bind("<B1-Motion>", do_drag)
+
+        # 控件布局
+        top_bar_h = s_y(45)
+        
+        # 退出按钮
+        f_size_close = int(12 * font_scale)
         self.btn_close = tk.Label(self.root, text="×", font=("Microsoft YaHei", f_size_close),
                                   fg="#8E8E93", bg=self.bg_color, cursor="hand2")
-        self.btn_close.place(x=win_w - s_x(15), y=s_y(6), anchor="ne")
+        self.btn_close.place(x=win_w - s_x(15), y=s_y(2), anchor="ne")
 
         def on_close_enter(_): self.btn_close.config(fg="#FF453A")
         def on_close_leave(_): self.btn_close.config(fg="#8E8E93")
@@ -278,8 +293,8 @@ class BossTimerUnified:
         self.btn_close.bind("<Leave>", on_close_leave)
         self.btn_close.bind("<Button-1>", on_close_click)
 
-        # === Boss 托盘下拉菜单 ===
-        f_size_menu = int(11 * font_scale)
+        # Boss 托盘下拉菜单
+        f_size_menu = int(10 * font_scale)
         boss_name = BOSS_CONFIGS[self.current_boss]["name"]
         
         self.boss_menu_btn = tk.Menubutton(self.root, text=f"❖ 目标: {boss_name}", 
@@ -287,7 +302,6 @@ class BossTimerUnified:
                                            fg="#E5E5EA", bg=self.bg_color, 
                                            activebackground="#2C2C2E", activeforeground="#FFFFFF",
                                            cursor="hand2", relief="flat")
-        # 稍微往上抬一点，彻底告别遮挡
         self.boss_menu_btn.place(x=s_x(10), y=s_y(5), anchor="nw")
 
         self.boss_menu = tk.Menu(self.boss_menu_btn, tearoff=0, bg="#2C2C2E", fg="#FFFFFF", 
@@ -299,23 +313,37 @@ class BossTimerUnified:
         for key, cfg in BOSS_CONFIGS.items():
             self.boss_menu.add_command(label=f"{cfg['name']} ({cfg['en_name']})", 
                                        command=lambda k=key: self.handle_switch(k))
+            
+        f_size_reset = int(10 * font_scale)
+        self.btn_reset = tk.Label(self.root, text="↺ 重置计时", font=("Microsoft YaHei", f_size_reset),
+                                  fg="#8E8E93", bg=self.bg_color, cursor="hand2")
+        # 放置在下拉菜单右侧的逻辑标题栏安全区内
+        self.btn_reset.place(x=s_x(130), y=s_y(8), anchor="nw")
 
-        # [主计时器显示] 
+        # 鼠标悬停的视觉反馈
+        def on_reset_enter(_): self.btn_reset.config(fg="#E5E5EA")
+        def on_reset_leave(_): self.btn_reset.config(fg="#8E8E93")
+            
+        self.btn_reset.bind("<Enter>", on_reset_enter)
+        self.btn_reset.bind("<Leave>", on_reset_leave)
+        self.btn_reset.bind("<Button-1>", lambda e: self.reset_timer())    
+
+        # 主计时器显示
         y_time = top_bar_h 
         h_time = s_y(60)
-        f_size_time = int(42 * font_scale)
+        f_size_time = int(38 * font_scale)
         self.lbl_time = tk.Label(self.root, text="00.00", font=("Verdana", f_size_time, "bold"), fg="#FFFFFF", bg=self.bg_color)
         self.lbl_time.place(x=0, y=y_time, width=win_w, height=h_time)
         self.lbl_time.bind("<Button-1>", lambda e: self.reset_timer())
         
-        # [状态与信息展示区]
+        # 状态与信息展示区
         y_status = y_time + h_time
         h_status = s_y(25)
         f_size_status = int(10 * font_scale)
         self.lbl_status = tk.Label(self.root, text="O N   I D L E", font=("Microsoft YaHei", f_size_status, "bold"), fg="#8E8E93", bg=self.bg_color)
         self.lbl_status.place(x=0, y=y_status, width=win_w, height=h_status)
         
-        # [大幅调大 Debug(HP) 提示文字]
+        # HP 提示文字
         y_debug = y_status + h_status
         f_size_debug = int(11 * font_scale) # 字体从 8 调大到了 11
         self.lbl_debug = tk.Label(self.root, text="Waiting...", font=("Consolas", f_size_debug), fg="#FFD60A", bg=self.bg_color)
@@ -327,6 +355,15 @@ class BossTimerUnified:
         if hwnd:
             try:
                 import ctypes
+                # 读取当前图层扩展样式
+                style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                # 位清除操作：移除工具窗口属性 (使之可被枚举识别)
+                style = style & ~win32con.WS_EX_TOOLWINDOW
+                # 位或操作：强制注入应用窗口属性
+                style = style | win32con.WS_EX_APPWINDOW
+                win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, style)
+
+                # 执行物理圆角裁切
                 radius = s_x(18)
                 rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, win_w, win_h, radius, radius)
                 ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
@@ -349,7 +386,7 @@ class BossTimerUnified:
 
     def reposition_ui(self):
         #游戏开启后，动态将 UI 移动到对应的显示器/窗口位置
-        BASE_W, BASE_H = 360, 160  # [修改] 高度匹配新 UI
+        BASE_W, BASE_H = 360, 160  # 高度匹配新 UI
         win_w = int(self.screen_w * (BASE_W / 2560))
         win_h = int(self.screen_h * (BASE_H / 1440))
         ui_x = int(self.screen_w * (50 / 2560)) + self.screen_left
@@ -359,6 +396,9 @@ class BossTimerUnified:
 
     def reset_timer(self):
         with self.lock:
+            if self.state == "WAITING_FOR_GAME":
+                return
+                
             self.state = "IDLE"
             self.start_time, self.accumulated_time, self.final_display_time = 0.0, 0.0, 0.0
             self.finish_counter = 0
@@ -380,9 +420,6 @@ class BossTimerUnified:
                         time.sleep(1)
                         continue
 
-                if self.state == "FINISHED":
-                    time.sleep(0.1); continue
-
                 now = time.time()
                 img_boss = np.array(sct.grab(self.boss_monitor))
                 img_pause = np.array(sct.grab(self.pause_monitor))
@@ -392,18 +429,18 @@ class BossTimerUnified:
 
                 hsv_boss = cv2.cvtColor(img_boss[:,:,:3], cv2.COLOR_BGR2HSV)
 
-                # 1. 计算旧阈值掩膜
+                # 计算旧阈值掩膜
                 mask_main = cv2.inRange(hsv_boss, self.lower_red, self.upper_red)
                 
-                # 2. 如果是罗丹，叠加新阈值掩膜
+                # 如果是罗丹，叠加新阈值掩膜
                 if self.current_boss == "RHODAGN":
                     mask_new_1 = cv2.inRange(hsv_boss, self.rhodagn_l1, self.rhodagn_u1)
                     mask_new_2 = cv2.inRange(hsv_boss, self.rhodagn_l2, self.rhodagn_u2)
-                    # 使用按位或 (OR) 将所有符合条件的像素合并
+                    # 按位或 将所有符合条件的像素合并
                     mask_main = cv2.bitwise_or(mask_main, mask_new_1)
                     mask_main = cv2.bitwise_or(mask_main, mask_new_2)
 
-                # 3. 计算最终比例 (此时 red_ratio 包含了旧值和新值的所有符合像素)
+                # 计算最终比例 (red_ratio 包含了旧值和新值的所有符合像素)
                 red_ratio = cv2.countNonZero(mask_main) / self.boss_pixels
                 
                 # 计算 pause 区域是否全为 TARGET_PAUSE_BGR (允许±4误差，防止渲染色差)
@@ -416,20 +453,21 @@ class BossTimerUnified:
                 with self.lock:
                     self.debug_ratio = red_ratio
                     
-                    if self.state == "IDLE":
-                        # 1. 检查右下角前置条件，要求无偏差 (diff == 0)
+                    if self.state in ["IDLE", "FINISHED"]:
+                        # 检查右下角前置条件，要求无偏差 (diff == 0)
                         diff_pre = np.abs(img_pre_ready[:, :, :3].astype(int) - self.TARGET_PRE_READY_BGR)
                         is_pre_ready = np.all(diff_pre == 0)
 
                         if is_pre_ready:
-                            # 只要满足前置条件，就不断刷新 0.5 秒的窗口期起点
                             self.pre_ready_timestamp = now
 
-                        # 2. 如果当前处于 0.5 秒的窗口期内，且原版逻辑通过，则正式进入 WAITING
+                        # 0.5 秒窗口期内原逻辑通过，则强制重置计时器并切入 WAITING
                         if (now - self.pre_ready_timestamp <= 0.5) and self.pre_ready_timestamp > 0:
                             if is_wait_triggered:
+                                self.start_time, self.accumulated_time, self.final_display_time = 0.0, 0.0, 0.0
+                                self.finish_counter = 0 
                                 self.state = "WAITING"
-                                self.pre_ready_timestamp = 0.0 # 触发后清空标记
+                                self.pre_ready_timestamp = 0.0
                             
                     elif self.state == "WAITING":
                         # 所有 Boss 统一：只要目标区域颜色不再符合（转场消失/UI变化），立刻进入 FIGHTING
@@ -458,26 +496,78 @@ class BossTimerUnified:
 
     def update_ui(self):
         now = time.time()
+        
+        # 实时获取 UI 窗口位置，遮挡检测
+        try:
+            wx1 = self.root.winfo_x()
+            wy1 = self.root.winfo_y()
+            wx2 = wx1 + self.root.winfo_width()
+            wy2 = wy1 + self.root.winfo_height()
+            
+            # 将五个核心视觉监测区打包，进行遍历遮挡检测
+            monitors = [
+                getattr(self, "boss_monitor", {}),
+                getattr(self, "pause_monitor", {}),
+                getattr(self, "finish_monitor", {}),
+                getattr(self, "wait_monitor", {}),
+                getattr(self, "pre_ready_monitor", {})
+            ]
+            
+            is_overlap = False
+            for m in monitors:
+                if "left" not in m: continue
+                mx1, my1 = m["left"], m["top"]
+                mx2, my2 = mx1 + m["width"], my1 + m["height"]
+                # 二维矩形相交判定公式：并非不相交，即为相交
+                if not (wx2 <= mx1 or wx1 >= mx2 or wy2 <= my1 or wy1 >= my2):
+                    is_overlap = True
+                    break
+        except Exception:
+            is_overlap = False
+
         with self.lock:
+            # 提取基础状态下的显示数据
             if self.state == "WAITING_FOR_GAME":
-                self.lbl_status.config(text="游戏未启动", fg="#FF4444")
-                self.lbl_time.config(text="--.--",fg="#555555")
+                t_txt, t_fg = "--.--", "#555555"
+                s_txt, s_fg = "游戏未启动", "#FF4444"
             elif self.state == "IDLE":
-                self.lbl_status.config(text="I D L E", fg="#555555")
-                self.lbl_time.config(text="00.00", fg="#555555")
+                t_txt, t_fg = "00.00", "#555555"
+                s_txt, s_fg = "I D L E", "#555555"
+            elif self.state == "WAITING": 
+                t_txt, t_fg = "00.00", "#FFFFFF"
+                s_txt, s_fg = "READY", "#FFFFFF"
             elif self.state == "FIGHTING":
                 cur = (now - self.start_time) + self.accumulated_time
-                self.lbl_time.config(text=f"{cur:.2f}", fg="#FF4444")
-                self.lbl_status.config(text="FIGHTING", fg="#FF4444")
+                t_txt, t_fg = f"{cur:.2f}", "#FF4444"
+                s_txt, s_fg = "FIGHTING", "#FF4444"
             elif self.state == "PAUSED":
-                self.lbl_time.config(text=f"{self.accumulated_time:.2f}", fg="#FFD700")
-                self.lbl_status.config(text="P A U S E D", fg="#FFD700")
+                t_txt, t_fg = f"{self.accumulated_time:.2f}", "#FFD700"
+                s_txt, s_fg = "P A U S E D", "#FFD700"
             elif self.state == "FINISHED":
-                self.lbl_time.config(text=f"{self.final_display_time:.2f}", fg="#32CD32")
-                self.lbl_status.config(text="F I N I S H", fg="#32CD32")
-            elif self.state == "WAITING":
-                self.lbl_status.config(text="READY", fg="#FFFFFF")
-                self.lbl_time.config(text="00.00", fg="#FFFFFF")
+                t_txt, t_fg = f"{self.final_display_time:.2f}", "#32CD32"
+                s_txt, s_fg = "F I N I S H", "#32CD32"
+            else:
+                t_txt, t_fg = "--.--", "#FFFFFF"
+                s_txt, s_fg = "UNKNOWN", "#FFFFFF"
+
+            # 遮挡拦截逻辑（需求覆写） 
+            if is_overlap:
+                warn_msg = "拖到此处会影响计时器正常工作，换个位置吧~"
+                s_fg = "#FF4444"
+                
+                if self.state in ["WAITING_FOR_GAME", "IDLE", "WAITING"]:
+                    # 静止状态：重置数字并提示
+                    t_txt = "--.--"
+                    s_txt = warn_msg
+                elif self.state == "FINISHED":
+                    # 结算状态：保留最终成绩并提示
+                    s_txt = warn_msg
+                elif self.state in ["FIGHTING", "PAUSED"]:
+                    # 战斗状态：计时器不受影响继续滚动，下方文字变提示
+                    s_txt = warn_msg
+
+            self.lbl_time.config(text=t_txt, fg=t_fg)
+            self.lbl_status.config(text=s_txt, fg=s_fg)
             
             self.update_debug_text()
             
