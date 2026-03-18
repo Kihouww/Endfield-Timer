@@ -7,9 +7,13 @@ import win32con
 import ctypes
 
 try:
-    ctypes.windll.user32.SetProcessDPIAware()
+    # 强制应用最高级别的逐显示器 DPI 感知 (Per-Monitor V2)，彻底消除坐标撕裂
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
 except Exception:
-    pass
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 # ==========================================
 #  配置区域
@@ -117,11 +121,14 @@ class BossTimerUnified:
                 self.rhodagn_u2 = np.array(cfg["rhodagn_upper_2"])
 
             if "finish_rect" in cfg:
-                # 坐标计算
                 base_x1, base_y1, base_x2, base_y2 = cfg["finish_rect"]
-                real_left = int(base_x1 * self.ui_scale) + self.screen_left
+                
+                dist_center1 = base_x1 - 1280
+                dist_center2 = base_x2 - 1280
+                
+                real_left = int((self.screen_w / 2) + dist_center1 * self.ui_scale) + self.screen_left
+                real_right = int((self.screen_w / 2) + dist_center2 * self.ui_scale) + self.screen_left
                 real_top = int(base_y1 * self.ui_scale) + self.screen_top
-                real_right = int(base_x2 * self.ui_scale) + self.screen_left
                 real_bottom = int(base_y2 * self.ui_scale) + self.screen_top
                     
                 self.finish_monitor = {
@@ -163,43 +170,68 @@ class BossTimerUnified:
     def calculate_regions(self):
         # 获取游戏窗口绝对坐标
         hwnd = win32gui.FindWindow(None, "Endfield")
-        # 假窗口过滤
         self.game_found = False
 
         if hwnd and win32gui.IsWindowVisible(hwnd):
-            # 剔除边框，只取纯游戏画面的绝对坐标和长宽
             left, top = win32gui.ClientToScreen(hwnd, (0, 0))
             _, _, screen_w, screen_h = win32gui.GetClientRect(hwnd)
-
-            # 假窗口过滤
             if screen_w >= 1280:
                 self.game_found = True
         else:
-            # 没找到游戏时，默认抓取主显示器作为保底数据，防止程序崩溃
             with mss.mss() as sct:
                 m = sct.monitors[1]
                 screen_w, screen_h = m["width"], m["height"]
                 left, top = m["left"], m["top"]
             self.game_found = False
-            
-        self.scale_x = screen_w / 2560
-        self.scale_y = screen_h / 1440
 
-        # 缩放比例计算
-        self.ui_scale = min(self.scale_x, self.scale_y)
+        # 锚点
+        self.ui_scale = screen_h / 1440.0
+        
+        self.scale_x = self.ui_scale * 1.2
+        self.scale_y = self.ui_scale * 1.2
 
+        self.font_scale = screen_h / 1440.0
+        
         self.screen_left = left
         self.screen_top = top
         self.screen_w = screen_w
         self.screen_h = screen_h
 
-        def get_region(x1, y1, x2, y2):
-            l = int(x1 * self.ui_scale) + left
-            t = int(y1 * self.ui_scale) + top
-            r = int(x2 * self.ui_scale) + left
-            b = int(y2 * self.ui_scale) + top
-            return {"left": l, "top": t, "width": max(1, r - l), "height": max(1, b - t)}
+        # 定义锚点换算函数 (基准分辨率: 2560x1440)
+        def calc_x(base_x, anchor="left"):
+            if anchor == "left":
+                return int(base_x * self.ui_scale)
+            elif anchor == "right":
+                # 距离右侧边缘的绝对距离
+                dist_from_right = 2560 - base_x
+                return int(screen_w - dist_from_right * self.ui_scale)
+            elif anchor == "center":
+                # 距离屏幕中央的绝对距离
+                dist_from_center = base_x - 1280
+                return int((screen_w / 2) + dist_from_center * self.ui_scale)
 
+        def get_region(x1, y1, x2, y2, anchor_x="left", anchor_y="top"):
+            l = calc_x(x1, anchor_x) + left
+            r = calc_x(x2, anchor_x) + left
+            
+            if anchor_y == "top":
+                t = int(y1 * self.ui_scale) + top
+                b = int(y2 * self.ui_scale) + top
+            elif anchor_y == "bottom":
+                # 计算目标距离 1440p 画布底部的绝对像素差，然后再进行缩放推导
+                dist_from_bottom_1 = 1440 - y1
+                dist_from_bottom_2 = 1440 - y2
+                t = int(screen_h - dist_from_bottom_1 * self.ui_scale) + top
+                b = int(screen_h - dist_from_bottom_2 * self.ui_scale) + top
+            elif anchor_y == "center":
+                dist_from_center_1 = y1 - 720
+                dist_from_center_2 = y2 - 720
+                t = int((screen_h / 2) + dist_from_center_1 * self.ui_scale) + top
+                b = int((screen_h / 2) + dist_from_center_2 * self.ui_scale) + top
+                
+            return {"left": l, "top": t, "width": max(1, r - l), "height": max(1, b - t)}
+        
+        # Boss 血条居中对齐
         bw = int(633 * self.ui_scale)
         bh = int(16 * self.ui_scale)
         self.boss_monitor = {
@@ -209,22 +241,38 @@ class BossTimerUnified:
         }
         self.boss_pixels = bw * bh 
         
-        self.pause_monitor = get_region(2540, 630, 2560, 900)
-        self.wait_monitor = get_region(165, 175, 200, 200)
-        self.pre_ready_monitor = get_region(1675, 1300, 1700, 1340)
+        # 暂停按钮：右对齐
+        self.pause_monitor = get_region(2540, 630, 2560, 900, anchor_x="right", anchor_y="center")
+        
+        # Wait 提示：左对齐
+        self.wait_monitor = get_region(165, 175, 200, 200, anchor_x="left")
+        
+        # Ready 前置条件：右对齐
+        self.pre_ready_monitor = get_region(1680, 1300, 1700, 1340, anchor_x="right", anchor_y="bottom")
 
     def setup_ui(self):
         self.root = tk.Tk()
         self.root.title("Endfield_BossTimer")
         
+        try:
+            import ctypes
+            myappid = 'endfield.bosstimer'
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
+            self.root.iconbitmap("gugugaga.ico")
+        except Exception as e:
+            pass
+        
         # 动态布局计算
         BASE_W, BASE_H = 360, 160
-        
-        win_w = int(self.screen_w * (BASE_W / 2560))
-        win_h = int(self.screen_h * (BASE_H / 1440))
-        ui_x = int(self.screen_w * (50 / 2560)) + self.screen_left
-        ui_y = int(self.screen_h * (520 / 1440)) + self.screen_top
-        font_scale = min(self.scale_x, self.scale_y)
+
+        win_w = int(BASE_W * self.scale_x)
+        win_h = int(BASE_H * self.scale_y)
+
+        ui_x = int(50 * self.ui_scale) + self.screen_left
+        ui_y = int(520 * self.ui_scale) + self.screen_top
+
+        font_scale = self.font_scale
         
         def s_y(val): return int(val * self.scale_y)
         def s_x(val): return int(val * self.scale_x)
@@ -358,10 +406,13 @@ class BossTimerUnified:
                 # 读取当前图层扩展样式
                 style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
                 # 位清除操作：移除工具窗口属性 (使之可被枚举识别)
-                style = style & ~win32con.WS_EX_TOOLWINDOW
                 # 位或操作：强制注入应用窗口属性
                 style = style | win32con.WS_EX_APPWINDOW
                 win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, style)
+
+                # 绕过 Tkinter，直接在底层迅速隐现一次窗口，迫使 Windows 任务栏刷新并为其分配占位图标
+                win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
 
                 # 执行物理圆角裁切
                 radius = s_x(18)
@@ -386,11 +437,11 @@ class BossTimerUnified:
 
     def reposition_ui(self):
         #游戏开启后，动态将 UI 移动到对应的显示器/窗口位置
-        BASE_W, BASE_H = 360, 160  # 高度匹配新 UI
-        win_w = int(self.screen_w * (BASE_W / 2560))
-        win_h = int(self.screen_h * (BASE_H / 1440))
-        ui_x = int(self.screen_w * (50 / 2560)) + self.screen_left
-        ui_y = int(self.screen_h * (520 / 1440)) + self.screen_top
+        BASE_W, BASE_H = 360, 160  
+        win_w = int(BASE_W * self.scale_x)
+        win_h = int(BASE_H * self.scale_y)
+        ui_x = int(50 * self.ui_scale) + self.screen_left
+        ui_y = int(520 * self.ui_scale) + self.screen_top
         self.root.geometry(f"{win_w}x{win_h}+{ui_x}+{ui_y}")
 
 
@@ -496,13 +547,18 @@ class BossTimerUnified:
 
     def update_ui(self):
         now = time.time()
-        
-        # 实时获取 UI 窗口位置，遮挡检测
+
         try:
-            wx1 = self.root.winfo_x()
-            wy1 = self.root.winfo_y()
-            wx2 = wx1 + self.root.winfo_width()
-            wy2 = wy1 + self.root.winfo_height()
+            # 绕过 Tkinter 的逻辑坐标，直接调用 Win32 API 获取 UI 的物理坐标
+            hwnd_ui = win32gui.FindWindow(None, "Endfield_BossTimer")
+            if hwnd_ui:
+                wx1, wy1, wx2, wy2 = win32gui.GetWindowRect(hwnd_ui)
+            else:
+                # 备用方案
+                wx1 = self.root.winfo_rootx()
+                wy1 = self.root.winfo_rooty()
+                wx2 = wx1 + self.root.winfo_width()
+                wy2 = wy1 + self.root.winfo_height()
             
             # 将五个核心视觉监测区打包，进行遍历遮挡检测
             monitors = [
