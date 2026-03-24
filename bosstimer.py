@@ -84,6 +84,10 @@ class BossTimerUnified:
         self.IS_WAIT_BGR = np.array([254,253,255])
         self.TARGET_PRE_READY_BGR = np.array([236, 236, 238])
         self.pre_ready_timestamp = 0.0
+        self.pause_lifted_time = 0.0
+        self.abort_stable_timestamp = 0.0
+        self.black_screen_start_time = 0.0
+        self.is_black_screen_transition = False
 
         # 状态变量
         self.running = True
@@ -92,7 +96,7 @@ class BossTimerUnified:
         self.game_found = False
         self.start_time, self.accumulated_time = 0.0, 0.0
         self.final_display_time = 0.0
-        
+
         self.debug_ratio = 0.0
         self.lock = Lock()
 
@@ -185,12 +189,12 @@ class BossTimerUnified:
             self.game_found = False
 
         # 锚点
-        self.ui_scale = screen_h / 1440.0
+        self.ui_scale = min(screen_w / 2560.0, screen_h / 1440.0)
         
-        self.scale_x = self.ui_scale * 1.2
-        self.scale_y = self.ui_scale * 1.2
-
-        self.font_scale = screen_h / 1440.0
+        self.scale_x = self.ui_scale
+        self.scale_y = self.ui_scale
+        
+        self.font_scale = self.ui_scale
         
         self.screen_left = left
         self.screen_top = top
@@ -454,6 +458,10 @@ class BossTimerUnified:
             self.start_time, self.accumulated_time, self.final_display_time = 0.0, 0.0, 0.0
             self.finish_counter = 0
             self.pre_ready_timestamp = 0.0
+            self.pause_lifted_time = 0.0
+            self.abort_stable_timestamp = 0.0
+            self.black_screen_start_time = 0.0
+            self.is_black_screen_transition = False
 
     def vision_loop(self):
         with mss.mss() as sct:
@@ -526,20 +534,58 @@ class BossTimerUnified:
                             self.state, self.start_time = "FIGHTING", now
 
                     elif self.state == "FIGHTING":
-                        # [优先级 1] Finish
+                        if self.pause_lifted_time > 0 or self.is_black_screen_transition:
+                            is_black_screen = np.mean(img_finish[:, :, :3]) < 5
+                            
+                            if is_black_screen:
+                                if self.pause_lifted_time > 0 and now - self.pause_lifted_time <= 2.5:
+                                    if self.black_screen_start_time == 0.0:
+                                        self.black_screen_start_time = now
+                                    elif now - self.black_screen_start_time >= 1.0:
+                                        self.is_black_screen_transition = True
+                            else:
+                                if self.is_black_screen_transition:
+                                    self.start_time, self.accumulated_time, self.final_display_time = now, 0.0, 0.0
+                                    self.finish_counter, self.pause_lifted_time = 0, 0.0
+                                    self.abort_stable_timestamp, self.black_screen_start_time = 0.0, 0.0
+                                    self.is_black_screen_transition = False
+                                    continue
+                                else:
+                                    self.black_screen_start_time = 0.0
+                            
+                            if self.pause_lifted_time > 0 and not self.is_black_screen_transition:
+                                if now - self.pause_lifted_time <= 2.5:
+                                    if is_wait_triggered:
+                                        if self.abort_stable_timestamp == 0.0:
+                                            self.abort_stable_timestamp = now
+                                        elif now - self.abort_stable_timestamp >= 0.5:
+                                            self.state = "IDLE"
+                                            self.start_time, self.accumulated_time, self.final_display_time = 0.0, 0.0, 0.0
+                                            self.finish_counter, self.pre_ready_timestamp = 0, 0.0
+                                            self.pause_lifted_time, self.abort_stable_timestamp = 0.0, 0.0
+                                            self.black_screen_start_time, self.is_black_screen_transition = 0.0, False
+                                            continue  
+                                    else:
+                                        self.abort_stable_timestamp = 0.0 
+                                else:
+                                    self.pause_lifted_time = 0.0  
+                                    self.abort_stable_timestamp = 0.0
+                                    self.black_screen_start_time = 0.0
+                                    self.is_black_screen_transition = False
+
                         mask_finish = cv2.inRange(img_finish[:,:,:3], self.finish_lower, self.finish_upper)
                         mask_finish = cv2.bitwise_and(mask_finish, mask_finish, mask=self.finish_poly_mask)
                         if cv2.countNonZero(mask_finish) > self.finish_threshold and red_ratio < 0.05: 
                             self.final_display_time = (now - self.start_time) + self.accumulated_time - 0.22
                             self.state = "FINISHED"
 
-                        # [优先级 2] Pause
                         elif pause_detected:
                             self.accumulated_time += (now - self.start_time)
                             self.state = "PAUSED"
                             
                     elif self.state == "PAUSED" and not pause_detected:
                         self.start_time, self.state = now, "FIGHTING"
+                        self.pause_lifted_time = now
                             
                 time.sleep(0.005)
 
